@@ -1,0 +1,95 @@
+name: Daily anomaly monitor (synthetic demo)
+
+on:
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: 'Synthetic dry-run only; live monitoring requires approved private persistence'
+        type: choice
+        required: true
+        default: demo-dry-run
+        options:
+          - demo-dry-run
+          - live-blocked
+  schedule:
+    # 02:45 UTC = 08:15 Asia/Kolkata. Opt-in demo only; never sends email.
+    - cron: '45 2 * * *'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: daily-business-anomaly-monitor
+  cancel-in-progress: false
+
+jobs:
+  reject-unsafe-request:
+    if: >-
+      github.event_name == 'workflow_dispatch' &&
+      (inputs.mode != 'demo-dry-run' || github.ref != format('refs/heads/{0}', github.event.repository.default_branch))
+    runs-on: ubuntu-24.04
+    timeout-minutes: 2
+    permissions: {}
+    steps:
+      - name: Stop before checkout or secret access
+        run: |
+          echo '::error::Only default-branch synthetic dry-run is supported. Private durable history and input are not configured; live email is blocked.'
+          exit 2
+
+  synthetic-demo:
+    if: >-
+      github.ref == format('refs/heads/{0}', github.event.repository.default_branch) &&
+      ((github.event_name == 'workflow_dispatch' && inputs.mode == 'demo-dry-run') ||
+       (github.event_name == 'schedule' && vars.ENABLE_DAILY_DEMO == 'true'))
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    env:
+      PYTHON_DOTENV_DISABLED: '1'
+      PYTHONDONTWRITEBYTECODE: '1'
+      PIP_DISABLE_PIP_VERSION_CHECK: '1'
+      EXCEL_PATH: data/sample_business_data.xlsx
+      BASELINE_WINDOW: '7'
+      ANOMALY_THRESHOLD: '20'
+      REPORTS_DIR: reports/synthetic-demo
+      DATABASE_DIR: state/synthetic-demo
+      # No secrets are referenced or made available to public demonstration code.
+      SMTP_HOST: ''
+      SMTP_PORT: '587'
+      SMTP_SECURITY: starttls
+      SMTP_USERNAME: ''
+      SMTP_PASSWORD: ''
+      SMTP_FROM: ''
+      ALERT_RECIPIENTS: ''
+      SMTP_TIMEOUT: '30'
+    steps:
+      - name: Check out reviewed default-branch source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Verify the public synthetic input
+        run: |
+          test ! -e .env
+          echo '75d5a2ca125f58270de0b1215189b33acc25e783d2e5f8ce45ee0cf100cf9e5f  data/sample_business_data.xlsx' | sha256sum --check --status
+      - name: Set up Python 3.12
+        uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: '3.12'
+      - name: Install pinned dependencies
+        run: python -m pip install -r requirements-dev.txt
+      - name: Run complete tests (SMTP mocked; network blocked in tests)
+        run: python -m pytest -q
+      - name: Analyze synthetic data without sending email
+        run: python -m app.main --dry-run
+      - name: Publish only the two synthetic reports
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: synthetic-anomaly-reports
+          path: |
+            reports/synthetic-demo/anomaly-report-2026-11-04.html
+            reports/synthetic-demo/anomaly-report-2026-11-04.txt
+          retention-days: 1
+          if-no-files-found: error
+          include-hidden-files: false
+      - name: State the demonstration boundary
+        run: |
+          echo 'Synthetic demonstration completed. No email sent. Temporary demo history is not operational persistence.' >> "$GITHUB_STEP_SUMMARY"

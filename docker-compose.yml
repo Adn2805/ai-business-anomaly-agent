@@ -1,0 +1,20 @@
+services:
+  monitor:
+    build: .
+    image: ai-business-anomaly-agent:local
+    env_file: .env
+    environment:
+      EXCEL_PATH: /app/data/${INPUT_FILENAME:-sample_business_data.xlsx}
+      REPORTS_DIR: /app/reports
+      DATABASE_DIR: /app/state
+    volumes:
+      - ./data:/app/data:ro
+      - ./reports:/app/reports
+      - ./state:/app/state
+    read_only: true
+    tmpfs:
+      - /tmp
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
